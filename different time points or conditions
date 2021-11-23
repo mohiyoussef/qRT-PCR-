@@ -1,0 +1,79 @@
+#Install the following packages 
+#if(!require(tidyverse)) install.packages("tidyverse")
+#if(!require(ggpubr)) install.packages("ggpubr") 
+#if(!require(lazyeval)) install.packages("lazyeval")
+#if(!require(WriteXLS)) install.packages("WriteXLS")
+#if(!require(devtools)) install.packages("devtools")
+#if(!require(qPCRanalysis)) devtools::install_github("SCIL-leuven/qPCRanalysis")
+
+library(tidyverse)
+library(readxl)
+library(qPCRanalysis)
+library(ggpubr)
+library(lazyeval)
+
+#use mean of Technical replicates in technical replicates sheet to avoid counting tech. replicates as replicates in ddct calculation
+#Load file (Replicate number wriiten at end Genotype_(stress if any)_(#))
+qpcr <- read_excel("##.xls", 
+                   sheet = "Technical Analysis Result", 
+                   skip = 35, n_max = 109)
+View(qpcr)
+
+#Select columns
+qpcr <- select(qpcr, c("Sample Name", "Target Name", "Ct Mean"))
+colnames(qpcr) <- c("Sample", "Gene", "CT")
+head(qpcr)
+
+#Convert CT into numeric and NA to 40
+qpcr$CT <- as.numeric(qpcr$CT)
+qpcr[is.na(qpcr$CT), "CT"] <- 40
+head(qpcr)
+
+#Create grouping variable (Stress not needed in normal conditions)
+qpcr <- qpcr %>%
+  #Copy Sample column
+  mutate(temp = Sample) %>%
+  #Split Sample column to create genotype column
+  separate(col = temp, into = c("Genotype", "Stress", "temp"), sep = "_") %>%
+  #remove temp column
+  select(-temp)
+head(qpcr)
+
+#Paste two diff groups together (not needed in normal conditions)
+qpcr$Genotype_Stress <- paste(qpcr$Genotype,qpcr$Stress)
+qpcr
+
+#Calculate Delta CT
+qpcr <- calculate_DCT(df = qpcr, 
+                      hkg = c("RPLP0","GAPDH"), 
+                      sample_col = "Sample", 
+                      gene_col = "Gene")
+
+#Statistics (T-test) between two groups
+stat <- compare_means(DCT ~ Genotype, qpcr, method = "t.test", paired = FALSE, group.by = "Gene")
+head(stat)
+
+#Plot delta CT
+ggplot(qpcr, aes(x = Genotype, y = DCT, col = Genotype)) +
+  geom_boxplot() +
+  facet_wrap(~Gene, scales = "free_y") +
+  stat_compare_means(method = "t.test", label = "p.signif", label.x = 1.5)
+
+#Calculate Delta Delta CT
+ddct <- calculate_DDCT(df = qpcr, 
+                       gene_col = "Gene", 
+                       sample_col = "Sample", 
+                       var_col = "Genotype_Stress", 
+                       control = "WT NOES")
+head(ddct)
+view(ddct)
+#Plot Delta Delta CT
+ggplot(ddct, aes(x = Genotype_Stress, y = DDCTavg, fill = Genotype_Stress)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = DDCTmin, ymax = DDCTmax), width = 0.1, data = ddct) +
+  facet_wrap(~Gene, scales = "free_y")
+
+#Export
+library(WriteXLS)
+WriteXLS(c("qpcr", "stat", "ddct"), "##.xlsx")
+
